@@ -33,7 +33,11 @@ const LOCAL_CLIPS = ['/v4.mp4', '/v5.mp4', '/v9.mp4'];
    commonly hit clips are also the fastest to load.
    Deliberately excluded: /videos/generic/v1.mp4 (178 MB) and
    /videos/building/b1.mp4 (278 MB) - both large enough to stall a popup
-   on open. Add them here if you compress them. */
+   on open. Add them here if you compress them.
+   Also excluded: /videos/building/b2.mp4 (107 MB). The site is now
+   deployed from a git repository whose root IS the served directory, and
+   GitHub rejects any single file over 100 MB, so that clip cannot ship
+   with the build. Compress it below 100 MB to put it back. */
 const GENERIC_LOCAL_CLIPS = [
   '/videos/building/b5.mp4',   // 2.6 MB
   '/videos/building/b6.mp4',   // 3.4 MB
@@ -44,7 +48,6 @@ const GENERIC_LOCAL_CLIPS = [
   '/videos/generic/v4.mp4',    // 46 MB
   '/videos/generic/v3.mp4',    // 64 MB
   '/videos/building/b4.mp4',   // 71 MB
-  '/videos/building/b2.mp4',   // 107 MB
 ];
 
 // Flip to false to put the ScreenPal embeds from src/config/cameras.js back

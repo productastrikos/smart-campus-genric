@@ -4,16 +4,16 @@
  * The published repo (productastrikos/smart-campus-genric) is laid out so
  * Hostinger can be pointed at the ROOT DIRECTORY and serve it as-is:
  *
- *   /                 index.html, assets/, images/, api-data/, .htaccess
+ *   /                 index.html, assets/, images/, api-data/, videos/, .htaccess
  *   /src-app          this project, kept so the site can be rebuilt
  *
  * After changing anything under src-app, run:
  *
  *   npm run build:static && node scripts/deploy-root.mjs
  *
- * which copies the fresh dist/ over the root files it owns and removes
- * stale fingerprinted assets. Nothing outside that set is touched, so the
- * README, .gitignore and src-app/ itself are safe.
+ * which replaces every root entry with the fresh dist/, so stale fingerprinted
+ * assets and dropped files are cleared rather than left behind. The repo's own
+ * files — README, .gitignore, .gitattributes, src-app/ — are never touched.
  */
 import { cp, rm, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -24,8 +24,11 @@ const SRC_APP = path.resolve(HERE, '..');          // .../src-app
 const DIST = path.join(SRC_APP, 'dist');
 const ROOT = path.resolve(SRC_APP, '..');          // repository root
 
-// Only these root entries are managed by the build; everything else is left be.
-const OWNED = ['index.html', '.htaccess', 'assets', 'images', 'api-data'];
+// Everything at the root belongs to the build EXCEPT these, which are the
+// repository's own files. Working by exclusion rather than an allow-list means
+// adding an output directory (videos/, say) needs no change here, and a file
+// dropped from the build is cleared away instead of lingering as a stale copy.
+const KEEP = new Set(['.git', '.gitignore', '.gitattributes', 'README.md', 'src-app']);
 
 const exists = (p) => stat(p).then(() => true, () => false);
 
@@ -38,7 +41,8 @@ if (path.resolve(ROOT) === path.resolve(SRC_APP)) {
   process.exit(1);
 }
 
-for (const name of OWNED) {
+for (const name of await readdir(ROOT)) {
+  if (KEEP.has(name)) continue;
   await rm(path.join(ROOT, name), { recursive: true, force: true });
 }
 

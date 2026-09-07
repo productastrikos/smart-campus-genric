@@ -31,6 +31,7 @@ server/index.js             Express API: aggregates CSVs into module JSON
 server/ext/api.js           auth, IoT inventory, extended academic modules
 client/                     React + Vite, 13 routes, Tailwind + design tokens
 scripts/bake-api.mjs        snapshots the API for static hosting
+scripts/sync-videos.mjs     restores the CCTV clips from the deployed root
 scripts/deploy-root.mjs     copies dist/ over the repo root
 ```
 
@@ -78,22 +79,29 @@ viewport. Its advisory pool lives in `client/src/components/PageAdvisory.jsx`
 alongside every other page's, which is the app's single per-page advisory
 surface.
 
-## Video assets (not in this repository)
+## CCTV footage
 
-The CCTV demo clips are excluded from git — several exceed GitHub's 100 MB
-limit. Everything else runs normally; the twin's camera tiles show no footage
-until the clips are supplied. Drop the `.mp4` files into:
+The clips live in `client/public/videos/` and drive two surfaces: the live
+camera wall on Incident Management (`client/src/config/cameras.js` —
+`GENERIC_CAMERA_GRID`, six tiles playing at once) and the twin's camera popups
+(`client/src/components/DigitalTwin2/data/cameraRegistry.js` —
+`GENERIC_LOCAL_CLIPS`, one clip per popup, chosen by hash).
 
-```
-client/public/v4.mp4  v5.mp4  v9.mp4
-client/public/videos/v1.mp4 … v6.mp4
-client/public/videos/building/b1.mp4 … b6.mp4
-client/public/videos/generic/v1.mp4 … v6.mp4
-```
+Both pools are ordered smallest-file-first, because the wall autoplays six
+clips simultaneously and several are 4K. Keep that order if you add clips.
 
-Paths are defined in `client/src/config/cameras.js` and
-`client/src/components/DigitalTwin2/data/cameraRegistry.js`. These stay ignored
-via `.gitignore`.
+In the deployed repository the clips are committed once at the ROOT (the
+served directory), and these copies are gitignored — identical bytes, no point
+storing 300 MB twice. `npm run build:static` runs `scripts/sync-videos.mjs`
+first to copy them back, so a fresh clone still builds working footage. In a
+standalone checkout with no deployed root alongside it, that step no-ops and
+whatever is already in `client/public` is used.
+
+Three clips exceed GitHub's 100 MB per-file limit and are absent:
+`videos/building/b1.mp4` (265 MB), `videos/generic/v1.mp4` (170 MB) and
+`videos/building/b2.mp4` (103 MB). The first two were already excluded in code
+as too slow to open in a popup; `b2` was dropped from `GENERIC_LOCAL_CLIPS` for
+the size limit. Compress any of them under 100 MB to put it back.
 
 ## Demo storylines baked into the data
 

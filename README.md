@@ -17,6 +17,7 @@ and it works.** No Node process, no database, no build step on the server.
   index.html
   assets/             fingerprinted JS + CSS bundles
   images/             ADU logo lockups, campus hero
+  videos/             CCTV demo footage for the camera wall and twin popups
   api-data/           997 JSON snapshots of the API (see "How it runs static")
   .htaccess           SPA routing, compression, cache headers
 
@@ -24,7 +25,7 @@ and it works.** No Node process, no database, no build step on the server.
   client/             React + Vite + Tailwind front end
   server/             Express API over the CSV datasets (local dev only)
   data/               29 synthetic CSV datasets — the system of record
-  scripts/            bake-api.mjs, deploy-root.mjs
+  scripts/            bake-api.mjs, sync-videos.mjs, deploy-root.mjs
 ```
 
 ---
@@ -46,6 +47,9 @@ That is the whole process. `.htaccess` handles the rest:
   cached, snapshots revalidate every 5 minutes.
 - **`/src-app` is blocked** over HTTP; it is source, not web content.
 
+The repository is ~330 MB, almost all of it CCTV footage, so the first deploy
+takes a few minutes.
+
 `.htaccess` is a dotfile — if you upload by FTP rather than Git, make sure your
 client is set to show and transfer hidden files, or SPA routing will break.
 
@@ -57,8 +61,8 @@ The dashboard was built against an Express API (`src-app/server`) that
 aggregates the CSV datasets into module-shaped JSON. Shared hosting cannot run
 that, so the static build replaces it with a snapshot:
 
-1. `npm run build:static` builds the client with `VITE_STATIC_API=1`, then runs
-   `scripts/bake-api.mjs`.
+1. `npm run build:static` restores the CCTV clips (`scripts/sync-videos.mjs`),
+   builds the client with `VITE_STATIC_API=1`, then runs `scripts/bake-api.mjs`.
 2. The bake script boots the real Express API on a scratch port and crawls every
    endpoint the client can reach — discovering building ids, cadet ids, college
    codes, course codes and student ids from the responses as it goes — and
@@ -121,9 +125,10 @@ cd ..
 git add -A && git commit -m "..." && git push
 ```
 
-Then redeploy the root directory in hPanel. `scripts/deploy-root.mjs` only
-touches `index.html`, `.htaccess`, `assets/`, `images/` and `api-data/`, so
-your README, `.gitignore` and `src-app/` are never disturbed.
+Then redeploy the root directory in hPanel. `scripts/deploy-root.mjs` replaces
+every root entry with the fresh build, so stale fingerprinted assets are
+cleared rather than piling up. It never touches the repository's own files —
+`README.md`, `.gitignore`, `.gitattributes` and `src-app/`.
 
 ---
 
@@ -167,15 +172,44 @@ flagged room.
 
 ---
 
-## Video assets (not in this repository)
+## CCTV footage
 
-The CCTV demo clips are excluded from git — several exceed GitHub's 100 MB
-limit — so a fresh clone has none. Everything else runs normally; the Digital
-Twin camera tiles simply show no footage. To restore them, drop the `.mp4`
-files into `src-app/client/public/videos/` (paths are defined in
-`src-app/client/src/config/cameras.js` and
-`src-app/client/src/components/DigitalTwin2/data/cameraRegistry.js`), then
-rebuild and redeploy.
+The demo clips **are** in this repository, at the root, because the root is
+what gets served:
+
+```
+/videos/building/b3–b6.mp4      campus exteriors, courtyards, entrances
+/videos/generic/v2–v6.mp4       interiors, atriums, library, common rooms
+/videos/v1–v6.mp4, /v4,v5,v9    the older ZMU clip set
+```
+
+They drive the live camera wall on **Incident Management** and the camera
+popups in the **Campus Digital Twin**. The tile-to-clip mapping is in
+`src-app/client/src/config/cameras.js`; the twin's rotation pool is in
+`src-app/client/src/components/DigitalTwin2/data/cameraRegistry.js`.
+
+Three clips are **not** here — GitHub hard-rejects any single file over
+100 MB:
+
+| clip | size |
+|---|---|
+| `building/b1.mp4` | 265 MB |
+| `generic/v1.mp4` | 170 MB |
+| `building/b2.mp4` | 103 MB |
+
+The first two were already excluded in the code as too slow to open in a
+popup. To add any of them, compress it under 100 MB, drop it into
+`/videos/`, and list it in the pools above.
+
+The clips are committed **once**, at the root. Their copies under
+`src-app/client/public/` are gitignored — identical bytes, and committing
+300 MB of video twice buys nothing. `npm run build:static` runs
+`scripts/sync-videos.mjs` first, which copies them back from the root, so a
+fresh clone still builds a site with working footage.
+
+Note that several clips are 4K (some portrait 2160×3840). Six play at once on
+the camera wall, so they are assigned smallest-first to keep it smooth. If you
+replace them, keep that in mind.
 
 ---
 

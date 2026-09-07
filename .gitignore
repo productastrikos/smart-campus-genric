@@ -8,12 +8,18 @@ node_modules/
 # output of a local build, is ignored.
 src-app/dist/
 
-# Video assets are excluded from git (GitHub rejects files over 100 MB).
-# Drop the demo clips locally under src-app/client/public/videos/ — see README.
-*.mp4
-*.mov
-*.avi
-*.mkv
-*.webm
-*.wmv
-*.m4v
+# The CCTV demo clips ARE tracked, ONCE, at the repository root (/videos,
+# /v4.mp4, /v5.mp4, /v9.mp4) — that is the directory Hostinger serves, so the
+# footage has to ship with the site.
+#
+# Their copies inside the source tree are ignored: they are byte-identical, and
+# committing ~300 MB of video twice buys nothing. `npm run build:static` runs
+# scripts/sync-videos.mjs first, which copies them back from the root, so a
+# fresh clone still builds a site with working footage.
+src-app/client/public/videos/
+src-app/client/public/*.mp4
+
+# GitHub hard-rejects any single file over 100 MB, which is why
+# building/b1.mp4 (265 MB), generic/v1.mp4 (170 MB) and building/b2.mp4
+# (103 MB) are absent. Compress them under 100 MB to add them, and re-list
+# them in the clip pools in cameras.js / cameraRegistry.js.

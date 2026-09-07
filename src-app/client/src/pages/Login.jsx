@@ -159,9 +159,6 @@ export default function Login({ onLogin }) {
           <h1 style={{ fontSize: 46, fontWeight: 800, color: '#fdf7ea', lineHeight: 1.12, letterSpacing: '-0.02em' }}>
             Smart Digital Campus
           </h1>
-          <p style={{ fontSize: 13.5, color: 'rgba(253,247,234,0.72)', marginTop: 12, lineHeight: 1.6 }}>
-            Governed exchange backbone across academics, facilities, security and enterprise operations.
-          </p>
         </div>
 
         {/* CC BY-SA 4.0 requires visible attribution for the campus photograph. */}

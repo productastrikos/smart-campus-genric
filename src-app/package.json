@@ -16,8 +16,9 @@
     "sync-videos": "node scripts/sync-videos.mjs",
     "preview:static": "vite preview --outDir ../dist --port 4173",
     "deploy": "npm run build:static && node scripts/deploy-root.mjs",
-    "start": "npm run build && node server/index.js",
-    "preview": "vite preview"
+    "start": "node scripts/start-host.mjs",
+    "preview": "vite preview",
+    "start:api": "npm run build && node server/index.js"
   },
   "dependencies": {
     "@react-three/drei": "^9.122.0",

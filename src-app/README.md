@@ -20,7 +20,15 @@ npm run build          # normal build — expects the API at runtime
 npm run build:static   # static build + API snapshot (see below)
 npm run preview:static # serve the static build on :4173 with no API running
 npm run deploy         # build:static, then refresh the site at the repo root
+npm start              # serve the committed site at the repo root (what a host runs)
+npm run start:api      # build, then run the live Express API + dist (old `start`)
 ```
+
+`npm start` is deliberately NOT a build. A host configured with its root
+directory set to `src-app` runs it, and rebuilding for ~35s before binding
+`$PORT` trips a start health-check; it would also serve a build with no CCTV
+clips, which are gitignored here and committed at the repository root. See
+`scripts/start-host.mjs`.
 
 ## Architecture
 
@@ -33,6 +41,7 @@ client/                     React + Vite, 13 routes, Tailwind + design tokens
 scripts/bake-api.mjs        snapshots the API for static hosting
 scripts/sync-videos.mjs     restores the CCTV clips from the deployed root
 scripts/deploy-root.mjs     copies dist/ over the repo root
+scripts/start-host.mjs      what `npm start` runs; serves the committed site
 ```
 
 - **Design standard**: tokens, KPI cards, nav and panel styles ported from

@@ -35,8 +35,20 @@ and it works.** No Node process, no database, no build step on the server.
 ## Deploying to Hostinger
 
 1. In hPanel, connect this repository under **Website → Git**.
-2. Set the repository directory to **`/`** (the root) and the branch to `main`.
+2. Set the branch to `main` and configure:
+
+   | Setting | Value | Why |
+   |---|---|---|
+   | **Root directory** | `/` (blank) | **The most important one.** Set to `src-app`, the host never sees the pre-built site and builds the source instead. |
+   | **Framework** | Static / None | This is a static site. "Express" makes the host try to run a server. |
+   | **Build command** | *(blank)* | Already built and committed. |
+   | **Output directory** | *(blank)* | The root *is* the output. |
+
 3. Deploy. Hostinger copies the root into `public_html` and serves it.
+
+If a deploy log's build line reads `zmu-smart-campus-dashboard@1.0.0 build`,
+the root directory is still pointing at `src-app` — that is the source
+project's name, not this one's (`adu-smart-campus-site`).
 
 **There is no build step, and there must not be one.** The root
 `package.json` exists to say so: it declares a no-op `build` script and no
@@ -48,24 +60,33 @@ and still leaves you with a broken or failed deployment. (A deploy log whose
 build line reads `zmu-smart-campus-dashboard@1.0.0 build` is this happening.)
 If hPanel asks for a build command or output directory, leave both blank.
 
-### If the host is a Node.js application, not a static site
+### Other host configurations
 
-Some plans deploy this as a Node app and run `npm start`, expecting a process
-listening on `$PORT`. That is covered too: `npm start` runs `server.js`, a
-zero-dependency static server for this same directory. It applies the same
-rules as `.htaccess` — SPA fallback, real 404s for missing assets, `/src-app`
-refused, correct MIME types, and HTTP Range support so the CCTV clips can seek
-and start playing before they finish downloading.
+The settings above are the intended ones, but the repository is built to
+survive the others rather than fail:
 
-So both paths work:
+| Root directory | Framework | What runs | Serves |
+|---|---|---|---|
+| `/` | Static | Apache/LiteSpeed + `.htaccess` | the repo root |
+| `/` | Node / Express | `npm start` → `server.js` | the repo root |
+| `src-app` | Node / Express | `npm start` → `scripts/start-host.mjs` → `../server.js` | the repo root |
 
-| Host mode | What runs | Serves |
-|---|---|---|
-| Static site | Apache/LiteSpeed + `.htaccess` | the repo root |
-| Node.js app | `npm start` → `server.js` | the repo root |
+`server.js` is a zero-dependency static server (node builtins only) applying
+the same rules as `.htaccess`: SPA fallback, real 404s for missing assets,
+`/src-app` refused, correct MIME types, and HTTP Range support so the CCTV
+clips can seek and start playing before they finish downloading.
 
-Either way nothing is installed and nothing is compiled — the site is already
-built and committed.
+The third row matters because a host pointed at `src-app` never sees the root
+`package.json`. `src-app`'s own `npm start` used to be
+`npm run build && node server/index.js`, which spent ~35 seconds rebuilding
+before it bound `$PORT` — long enough for a start health-check to give up and
+fail the deploy — and then served a build with no CCTV clips, since those are
+gitignored under `src-app` and committed at the root. It now launches the
+committed site directly and binds immediately. To get the old behaviour (build,
+then run the live Express API), use `npm run start:api`.
+
+Nothing is compiled in any of these paths — the site is already built and
+committed.
 
 `.htaccess` handles the rest:
 

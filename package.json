@@ -2,12 +2,14 @@
   "name": "adu-smart-campus-site",
   "version": "1.0.0",
   "private": true,
-  "description": "Abu Dhabi University Smart Digital Campus — PRE-BUILT static site. The repository root is the deployable artifact: index.html, assets/, images/, videos/ and api-data/ are already built and committed. Nothing needs installing or building to host this; point the web root at this directory and serve it. This file exists so that hosts which auto-detect a Node project (Hostinger, Netlify, Vercel, Render) find a no-op build here at the root instead of descending into src-app/ and running the source build, which writes to src-app/dist — a directory that is gitignored, is not served, and lacks the baked api-data the site needs.",
+  "description": "Abu Dhabi University Smart Digital Campus - PRE-BUILT static site. The repository root is the deployable artifact: index.html, assets/, images/, videos/ and api-data/ are already built and committed. On static hosting nothing needs installing or building - point the web root here and serve it. This file exists so hosts that auto-detect a Node project (Hostinger, Netlify, Vercel, Render) find a no-op build at the root instead of descending into src-app/ and running the source build, which writes to src-app/dist - a directory that is gitignored, is not served, and lacks the baked api-data the site needs. If the host is configured as a Node application instead, `npm start` runs server.js, a zero-dependency static server for this same directory.",
   "scripts": {
-    "build": "node -e \"const f=require('fs');if(!f.existsSync('index.html'))throw new Error('index.html is missing from the repository root - the committed build is incomplete');console.log('Nothing to build. This repository root IS the pre-built site; serve it as static files.')\"",
-    "start": "node -e \"console.log('Static site. Serve the repository root with any web server; see README.md.')\""
+    "build": "node -e \"import('node:fs').then(({existsSync})=>{if(!existsSync('index.html'))throw new Error('index.html is missing from the repository root - the committed build is incomplete');console.log('Nothing to build. This repository root IS the pre-built site; serve it as static files.')})\"",
+    "start": "node server.js"
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "type": "module",
+  "main": "server.js"
 }

@@ -35,6 +35,9 @@ const KEEP = new Set([
   // writes to a directory that is neither committed nor served. It must
   // survive a deploy. node_modules is whatever `npm install` leaves behind.
   'package.json', 'package-lock.json', 'node_modules',
+  // Zero-dependency static server for hosts configured as a Node APPLICATION
+  // rather than a static site; `npm start` at the root runs it.
+  'server.js',
 ]);
 
 const exists = (p) => stat(p).then(() => true, () => false);

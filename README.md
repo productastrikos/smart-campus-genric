@@ -15,6 +15,7 @@ and it works.** No Node process, no database, no build step on the server.
 ```
 /                     ← the deployable site. This is what Hostinger serves.
   package.json        no-op build, so hosts don't try to build src-app/
+  server.js           zero-dep static server, for Node-app hosting
   index.html
   assets/             fingerprinted JS + CSS bundles
   images/             ADU + Astrikos logo lockups, campus hero
@@ -38,13 +39,33 @@ and it works.** No Node process, no database, no build step on the server.
 3. Deploy. Hostinger copies the root into `public_html` and serves it.
 
 **There is no build step, and there must not be one.** The root
-`package.json` exists solely to say so: it declares a no-op `build` script and
-no dependencies. Without it, a host that auto-detects Node projects walks the
+`package.json` exists to say so: it declares a no-op `build` script and no
+dependencies. Without it, a host that auto-detects Node projects walks the
 tree, finds `src-app/package.json`, and runs the *source* build — which writes
 to `src-app/dist`, a directory that is gitignored, is not served, and is built
-without `VITE_STATIC_API=1` so it has no `api-data`. That build can report
-success and still leave you with a broken or failed deployment. If hPanel asks
-for a build command or output directory, leave both blank.
+without `VITE_STATIC_API=1` so it has no `api-data`. That build reports success
+and still leaves you with a broken or failed deployment. (A deploy log whose
+build line reads `zmu-smart-campus-dashboard@1.0.0 build` is this happening.)
+If hPanel asks for a build command or output directory, leave both blank.
+
+### If the host is a Node.js application, not a static site
+
+Some plans deploy this as a Node app and run `npm start`, expecting a process
+listening on `$PORT`. That is covered too: `npm start` runs `server.js`, a
+zero-dependency static server for this same directory. It applies the same
+rules as `.htaccess` — SPA fallback, real 404s for missing assets, `/src-app`
+refused, correct MIME types, and HTTP Range support so the CCTV clips can seek
+and start playing before they finish downloading.
+
+So both paths work:
+
+| Host mode | What runs | Serves |
+|---|---|---|
+| Static site | Apache/LiteSpeed + `.htaccess` | the repo root |
+| Node.js app | `npm start` → `server.js` | the repo root |
+
+Either way nothing is installed and nothing is compiled — the site is already
+built and committed.
 
 `.htaccess` handles the rest:
 

@@ -252,14 +252,16 @@ export default function Layout({ children, user, onLogout }) {
                   Powered by
                 </span>
               )}
-              {/* The lockup is a wide horizontal mark-plus-wordmark (roughly
-                  3.2:1), so it needs the width to keep "ASTRIKOS" legible;
-                  collapsed, only the square "A" mark is shown. */}
+              {/* Vector, so it stays crisp at any density - the raster lockup
+                  it replaced was only 141px wide and went soft on retina.
+                  Wide horizontal mark-plus-wordmark (~3.1:1), so it needs the
+                  width to keep "ASTRIKOS" legible; collapsed, the square-
+                  cropped "A" mark is shown instead. */}
               <img className="powered-by-mark" alt="Astrikos"
-                src={collapsed ? '/images/astrikos-mark.png' : '/images/astrikos-logo.png'}
+                src={collapsed ? '/images/astrikos-mark.svg' : '/images/astrikos-logo.svg'}
                 style={collapsed
-                  ? { width: 22, height: 22, objectFit: 'contain' }
-                  : { width: 104, height: 'auto' }} />
+                  ? { width: 24, height: 24, objectFit: 'contain' }
+                  : { width: 112, height: 'auto' }} />
             </div>
           </div>
         </aside>

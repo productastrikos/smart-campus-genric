@@ -61,13 +61,13 @@ const NAV = [
       { to: '/executive', key: 'page.executive', icon: ['M3 3v18h18', 'M7 14l3-4 3 3 5-7'] },
       { to: '/', key: 'page.command', icon: ['M3 12h4l3-9 4 18 3-9h4'] },
       { to: '/digital-twin', key: 'page.twin', icon: ['M12 2L2 7l10 5 10-5-10-5z', 'M2 17l10 5 10-5', 'M2 12l10 5 10-5'] },
-      { to: '/smart-classrooms', key: 'page.smartClassrooms', icon: ['M2 4h20v12H2z', 'M8 20h8', 'M12 16v4', 'M6 8h6', 'M6 11h9'] },
     ],
   },
   {
     section: 'nav.coreModules',
     items: [
       { to: '/academic', key: 'page.academic', icon: ['M22 10L12 5 2 10l10 5 10-5z', 'M6 12v5c0 1.7 2.7 3 6 3s6-1.3 6-3v-5'] },
+      { to: '/smart-classrooms', key: 'page.smartClassrooms', icon: ['M2 4h20v12H2z', 'M8 20h8', 'M12 16v4', 'M6 8h6', 'M6 11h9'] },
       { to: '/readiness', key: 'page.readiness', icon: ['M22 12h-4l-3 9L9 3l-3 9H2'] },
       { to: '/enterprise', key: 'page.enterprise', icon: ['M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z', 'M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2'] },
       { to: '/campus-ops', key: 'page.campus', icon: ['M4 2h16v20H4z', 'M9 22v-4h6v4', 'M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01'] },
@@ -163,7 +163,7 @@ export default function Layout({ children, user, onLogout }) {
         <aside style={{
           width: sidebarW, flexShrink: 0, background: 'var(--app-chrome-bg)',
           display: 'flex', flexDirection: 'column', padding: collapsed ? '16px 8px' : '16px 10px',
-          borderInlineEnd: '1px solid var(--app-panel-border)', overflowY: 'auto', overflowX: 'hidden',
+          borderInlineEnd: '1px solid var(--app-panel-border)', overflow: 'hidden',
           transition: 'width 0.18s ease',
         }}>
           <div style={{
@@ -204,7 +204,10 @@ export default function Layout({ children, user, onLogout }) {
             )}
           </div>
 
-          <nav style={{ flex: 1, marginTop: 4 }}>
+          {/* Only the nav scrolls, so the brand header and the footer credit stay
+              pinned to the top and bottom of the sidebar however long it gets.
+              minHeight:0 is what lets a flex child actually shrink and scroll. */}
+          <nav style={{ flex: 1, marginTop: 4, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
             {nav.map((sec) => (
               <div key={sec.section}>
                 {!collapsed && <div className="nav-section-label">{t(sec.section)}</div>}
@@ -221,15 +224,41 @@ export default function Layout({ children, user, onLogout }) {
             ))}
           </nav>
 
-          {!collapsed && (
-            <div style={{ padding: '12px 10px 4px', borderTop: '1px solid var(--app-surface-raised)', fontSize: 10, color: 'var(--app-text-faint)', lineHeight: 1.6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--app-success)', display: 'inline-block' }} className="animate-blink" />
-                {isGeneric ? 'Smart Digital Campus' : t('app.university')}
+          {/* Sidebar footer — platform status, then the Astrikos credit sitting
+              in the bottom-left corner of the shell. The credit is shown in
+              both sidebar states: the full lockup when expanded, the mark on
+              its own when collapsed, where there is no room for the wordmark. */}
+          <div style={{ borderTop: '1px solid var(--app-surface-raised)', paddingTop: 12 }}>
+            {!collapsed && (
+              <div style={{ padding: '0 10px 10px', fontSize: 10, color: 'var(--app-text-faint)', lineHeight: 1.6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--app-success)', display: 'inline-block' }} className="animate-blink" />
+                  {isGeneric ? 'Smart Digital Campus' : t('app.university')}
+                </div>
+                <div className="ltr-num">{isGeneric ? 'Platform Status: Operational' : t('app.msi')}</div>
               </div>
-              <div className="ltr-num">{isGeneric ? 'Platform Status: Operational' : t('app.msi')}</div>
+            )}
+
+            <div title="Powered by Astrikos" style={{
+              display: 'flex', flexDirection: 'column', gap: 4,
+              padding: collapsed ? '0 0 10px' : '0 10px 10px',
+              alignItems: collapsed ? 'center' : 'flex-start',
+            }}>
+              {!collapsed && (
+                <span style={{
+                  fontSize: 8.5, fontWeight: 700, letterSpacing: '0.12em',
+                  textTransform: 'uppercase', color: 'var(--app-text-faint)',
+                }}>
+                  Powered by
+                </span>
+              )}
+              <img className="powered-by-mark" alt="Astrikos"
+                src={collapsed ? '/images/astrikos-mark.png' : '/images/astrikos-logo.png'}
+                style={collapsed
+                  ? { width: 22, height: 22, objectFit: 'contain' }
+                  : { width: 68, height: 'auto' }} />
             </div>
-          )}
+          </div>
         </aside>
 
         {/* ── Main column ── */}

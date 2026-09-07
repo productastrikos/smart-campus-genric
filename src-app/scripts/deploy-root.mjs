@@ -28,7 +28,14 @@ const ROOT = path.resolve(SRC_APP, '..');          // repository root
 // repository's own files. Working by exclusion rather than an allow-list means
 // adding an output directory (videos/, say) needs no change here, and a file
 // dropped from the build is cleared away instead of lingering as a stale copy.
-const KEEP = new Set(['.git', '.gitignore', '.gitattributes', 'README.md', 'src-app']);
+const KEEP = new Set([
+  '.git', '.gitignore', '.gitattributes', 'README.md', 'src-app',
+  // The root package.json is what stops auto-detecting hosts (Hostinger and
+  // friends) from descending into src-app/ and running the SOURCE build, which
+  // writes to a directory that is neither committed nor served. It must
+  // survive a deploy. node_modules is whatever `npm install` leaves behind.
+  'package.json', 'package-lock.json', 'node_modules',
+]);
 
 const exists = (p) => stat(p).then(() => true, () => false);
 

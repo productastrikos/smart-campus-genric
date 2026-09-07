@@ -364,6 +364,14 @@ body {
   transform: translateY(-2px);
   box-shadow: 0 6px 24px rgba(0,0,0,0.22);
 }
+
+/* ── "Powered by" credit ──────────────────────────────────────────
+   The Astrikos lockup is a light-silver gradient, made to sit on dark
+   ground. Against the light theme's near-white sidebar it all but
+   disappears, so it is darkened there; on dark it is left alone. */
+.powered-by-mark { display: block; opacity: 0.92; }
+body[data-theme='light'] .powered-by-mark { filter: brightness(0.45) contrast(1.3); opacity: 1; }
+
 body[data-theme='light'] .kpi-card { border: 1px solid rgba(0, 0, 0, 0.10); }
 body[data-theme='dark'] .kpi-card-divider { background: rgba(255, 255, 255, 0.08) !important; }
 

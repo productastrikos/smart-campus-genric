@@ -14,9 +14,10 @@ and it works.** No Node process, no database, no build step on the server.
 
 ```
 /                     ← the deployable site. This is what Hostinger serves.
+  package.json        no-op build, so hosts don't try to build src-app/
   index.html
   assets/             fingerprinted JS + CSS bundles
-  images/             ADU logo lockups, campus hero
+  images/             ADU + Astrikos logo lockups, campus hero
   videos/             CCTV demo footage for the camera wall and twin popups
   api-data/           997 JSON snapshots of the API (see "How it runs static")
   .htaccess           SPA routing, compression, cache headers
@@ -36,7 +37,16 @@ and it works.** No Node process, no database, no build step on the server.
 2. Set the repository directory to **`/`** (the root) and the branch to `main`.
 3. Deploy. Hostinger copies the root into `public_html` and serves it.
 
-That is the whole process. `.htaccess` handles the rest:
+**There is no build step, and there must not be one.** The root
+`package.json` exists solely to say so: it declares a no-op `build` script and
+no dependencies. Without it, a host that auto-detects Node projects walks the
+tree, finds `src-app/package.json`, and runs the *source* build — which writes
+to `src-app/dist`, a directory that is gitignored, is not served, and is built
+without `VITE_STATIC_API=1` so it has no `api-data`. That build can report
+success and still leave you with a broken or failed deployment. If hPanel asks
+for a build command or output directory, leave both blank.
+
+`.htaccess` handles the rest:
 
 - **SPA routing** — `/smart-classrooms`, `/digital-twin` and every other route
   are client-side paths with no file behind them. Requests that do not match a

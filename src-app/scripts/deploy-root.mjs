@@ -15,7 +15,7 @@
  * assets and dropped files are cleared rather than left behind. The repo's own
  * files — README, .gitignore, .gitattributes, src-app/ — are never touched.
  */
-import { cp, rm, readdir, stat } from 'node:fs/promises';
+import { cp, rm, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,18 +36,61 @@ const KEEP = new Set([
   // survive a deploy. node_modules is whatever `npm install` leaves behind.
   'package.json', 'package-lock.json', 'node_modules',
   // Zero-dependency static server for hosts configured as a Node APPLICATION
-  // rather than a static site; `npm start` at the root runs it.
-  'server.js',
+  // rather than a static site; `npm start` at the root runs app.js, and
+  // server.js is a one-line alias for it. Both must survive a deploy.
+  'app.js', 'server.js',
 ]);
 
 const exists = (p) => stat(p).then(() => true, () => false);
+
+/* SAFETY — this script DELETES every entry in ROOT that is not in KEEP, so it
+   must be certain ROOT is the deployment repository and not some unrelated
+   folder that merely happens to be the parent.
+
+   It is not enough to check that ROOT !== SRC_APP. Run from a standalone
+   checkout of the project (…/smart_university/scripts/), ROOT resolves to
+   whatever directory that checkout was cloned into — and the script would
+   cheerfully delete its siblings. That happened; it cost an 849 MB archive.
+
+   So: refuse unless ROOT carries this specific site's own marker files. */
+const MARKER_NAME = 'adu-smart-campus-site';
+
+async function assertDeployRoot() {
+  if (path.resolve(ROOT) === path.resolve(SRC_APP)) {
+    return 'src-app is the repository root — nothing to deploy into';
+  }
+  if (path.basename(SRC_APP) !== 'src-app') {
+    return `expected to live in <repo>/src-app/scripts, but this is ${SRC_APP}`;
+  }
+  const pkgPath = path.join(ROOT, 'package.json');
+  if (!(await exists(pkgPath))) return `${ROOT} has no package.json — not the deployment repository`;
+  let name;
+  try {
+    name = JSON.parse(await readFile(pkgPath, 'utf8')).name;
+  } catch (e) {
+    return `${ROOT}/package.json is unreadable: ${e.message}`;
+  }
+  if (name !== MARKER_NAME) {
+    return `${ROOT}/package.json is "${name}", expected "${MARKER_NAME}" — refusing to delete anything`;
+  }
+  for (const marker of ['index.html', 'app.js']) {
+    if (!(await exists(path.join(ROOT, marker)))) {
+      return `${ROOT} has no ${marker} — not the deployment repository`;
+    }
+  }
+  return null;
+}
 
 if (!(await exists(DIST))) {
   console.error(`[deploy-root] no build found at ${DIST} — run "npm run build:static" first`);
   process.exit(1);
 }
-if (path.resolve(ROOT) === path.resolve(SRC_APP)) {
-  console.error('[deploy-root] src-app is the repository root — nothing to deploy into');
+
+const problem = await assertDeployRoot();
+if (problem) {
+  console.error(`[deploy-root] refusing to run: ${problem}`);
+  console.error('[deploy-root] this script only ever runs from inside the deployment repository');
+  console.error('[deploy-root] (productastrikos/smart-campus-genric), as <repo>/src-app/scripts/deploy-root.mjs.');
   process.exit(1);
 }
 

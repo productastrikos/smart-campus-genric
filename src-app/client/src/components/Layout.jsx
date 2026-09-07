@@ -252,11 +252,14 @@ export default function Layout({ children, user, onLogout }) {
                   Powered by
                 </span>
               )}
+              {/* The lockup is a wide horizontal mark-plus-wordmark (roughly
+                  3.2:1), so it needs the width to keep "ASTRIKOS" legible;
+                  collapsed, only the square "A" mark is shown. */}
               <img className="powered-by-mark" alt="Astrikos"
                 src={collapsed ? '/images/astrikos-mark.png' : '/images/astrikos-logo.png'}
                 style={collapsed
                   ? { width: 22, height: 22, objectFit: 'contain' }
-                  : { width: 68, height: 'auto' }} />
+                  : { width: 104, height: 'auto' }} />
             </div>
           </div>
         </aside>

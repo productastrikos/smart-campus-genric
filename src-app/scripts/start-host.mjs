@@ -43,7 +43,7 @@ const run = (args, cwd) => {
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
 };
 
-const prebuilt = path.join(ROOT, 'server.js');
+const prebuilt = path.join(ROOT, 'app.js');
 if ((await exists(prebuilt)) && (await exists(path.join(ROOT, 'index.html')))) {
   console.log('[start] serving the pre-built site at the repository root');
   console.log('[start] (no build step - this is the committed, verified artifact)');

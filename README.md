@@ -15,7 +15,8 @@ and it works.** No Node process, no database, no build step on the server.
 ```
 /                     ← the deployable site. This is what Hostinger serves.
   package.json        no-op build, so hosts don't try to build src-app/
-  server.js           zero-dep static server, for Node-app hosting
+  app.js              zero-dep static server (CommonJS), for Node-app hosting
+  server.js           one-line alias for app.js
   index.html
   assets/             fingerprinted JS + CSS bundles
   images/             ADU + Astrikos logo lockups, campus hero
@@ -68,13 +69,24 @@ survive the others rather than fail:
 | Root directory | Framework | What runs | Serves |
 |---|---|---|---|
 | `/` | Static | Apache/LiteSpeed + `.htaccess` | the repo root |
-| `/` | Node / Express | `npm start` → `server.js` | the repo root |
-| `src-app` | Node / Express | `npm start` → `scripts/start-host.mjs` → `../server.js` | the repo root |
+| `/` | Node / Other | `npm start` → `app.js` | the repo root |
+| `src-app` | Node / Other | `npm start` → `scripts/start-host.mjs` → `../app.js` | the repo root |
 
-`server.js` is a zero-dependency static server (node builtins only) applying
-the same rules as `.htaccess`: SPA fallback, real 404s for missing assets,
+`app.js` is a zero-dependency static server (node builtins only) applying the
+same rules as `.htaccess`: SPA fallback, real 404s for missing assets,
 `/src-app` refused, correct MIME types, and HTTP Range support so the CCTV
-clips can seek and start playing before they finish downloading.
+clips can seek and start playing before they finish downloading. `server.js`
+is a one-line alias for it, for a host already pointed at that name.
+
+**`app.js` is CommonJS on purpose, and the root `package.json` deliberately
+has no `"type": "module"`.** Shared-hosting Node runtimes (Phusion Passenger,
+LiteSpeed LSNODE — what Hostinger and cPanel use) load the startup file with
+`require()`, and `require()` of an ES module throws `ERR_REQUIRE_ESM` on Node
+18 and 20. The app then never boots, and LiteSpeed answers every request with
+its *"503 Service Unavailable — The server is temporarily busy, try again
+later!"* page. A 503 on every path, including plain static files, is that.
+`app.js` is also the filename those runtimes default to when no startup file
+is configured. Keep both properties if you rewrite it.
 
 The third row matters because a host pointed at `src-app` never sees the root
 `package.json`. `src-app`'s own `npm start` used to be

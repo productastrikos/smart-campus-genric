@@ -1,0 +1,79 @@
+# Abu Dhabi University — Smart Digital Campus
+# Apache / LiteSpeed config for static hosting (Hostinger and similar).
+# Copied verbatim into the build output by Vite, since it lives in client/public.
+
+# ── SPA routing ───────────────────────────────────────────────────────
+# The dashboard uses BrowserRouter, so /smart-classrooms, /digital-twin and
+# friends are client-side routes with no file behind them. Anything that is
+# not a real file or directory is handed to index.html, which boots React and
+# lets the router resolve the path. Without this, a refresh or a shared deep
+# link returns 404.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Never rewrite requests for files that exist — assets, images, and the
+  # baked /api-data/*.json snapshots must be served as-is.
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # A missing asset must 404, not return index.html with a 200. The CCTV demo
+  # clips are deliberately absent from git (see README); serving HTML in their
+  # place makes <video> fail confusingly instead of just showing no footage.
+  RewriteRule \.(mp4|webm|mov|m4v|json|geojson|png|jpe?g|svg|webp|gif|ico|woff2?|ttf|css|js|map)$ - [R=404,L]
+
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# ── the application source is not web content ─────────────────────────
+# src-app/ carries the full project for rebuilding; nothing there should be
+# reachable over HTTP.
+<IfModule mod_rewrite.c>
+  RewriteRule ^src-app(/.*)?$ - [F,L]
+</IfModule>
+
+# ── MIME types ────────────────────────────────────────────────────────
+<IfModule mod_mime.c>
+  AddType application/javascript          .js .mjs
+  AddType application/json                .json
+  AddType application/geo+json            .geojson
+  AddType image/svg+xml                   .svg
+  AddType font/woff2                      .woff2
+</IfModule>
+
+# ── compression ───────────────────────────────────────────────────────
+# The JS bundle and the ~1000 baked JSON snapshots compress very well.
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml
+  AddOutputFilterByType DEFLATE application/javascript application/json
+  AddOutputFilterByType DEFLATE application/geo+json image/svg+xml
+</IfModule>
+
+# ── caching ───────────────────────────────────────────────────────────
+# Vite fingerprints everything under /assets, so those are immutable.
+# index.html must never be cached or a deploy will not reach browsers.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType image/jpeg                "access plus 1 month"
+  ExpiresByType image/png                 "access plus 1 month"
+  ExpiresByType image/svg+xml             "access plus 1 month"
+  ExpiresByType font/woff2                "access plus 1 year"
+</IfModule>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|css|woff2)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  # Snapshots change on every rebuild; revalidate rather than serve stale data.
+  <FilesMatch "^.*\.json$">
+    Header set Cache-Control "public, max-age=300, must-revalidate"
+  </FilesMatch>
+  <FilesMatch "^index\.html$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
+# NOTE: deliberately no `ErrorDocument 404 /index.html`. SPA deep links are
+# already handled by the rewrite above; adding it would also serve HTML in
+# place of genuinely missing assets, which is what the asset rule prevents.

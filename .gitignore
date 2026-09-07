@@ -1,0 +1,19 @@
+node_modules/
+.DS_Store
+*.log
+
+# Built output inside the source tree. The DEPLOYED build lives at the repo
+# root (index.html, assets/, images/, api-data/) and is committed on purpose —
+# Hostinger serves the root directory directly. Only src-app/dist, the scratch
+# output of a local build, is ignored.
+src-app/dist/
+
+# Video assets are excluded from git (GitHub rejects files over 100 MB).
+# Drop the demo clips locally under src-app/client/public/videos/ — see README.
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wmv
+*.m4v

@@ -1,0 +1,741 @@
+/**
+ * ZMU Smart Digital Campus — API server.
+ * Serves module-shaped JSON aggregated from the CSV datasets in /data
+ * (the CSVs are the system-of-record for this POC; every endpoint below
+ * maps to one dashboard module).
+ */
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const { loadTable } = require('./lib/csv');
+const { generate, DATA_DIR } = require('./generate/generate-data');
+
+if (!fs.existsSync(path.join(DATA_DIR, 'cadets.csv'))) {
+  console.log('No datasets found — generating...');
+  generate();
+}
+
+const TABLES = [
+  'buildings', 'cadets', 'wearables_daily', 'hpo_domains', 'bms_hourly', 'bms_assets',
+  'energy_daily', 'hrms_departments', 'hrms_recruitment', 'finance_budget', 'finance_cashflow',
+  'procurement_pos', 'sis_programs', 'lms_daily', 'sis_gpa_terms', 'labs', 'library',
+  'room_utilization', 'physical_security', 'siem_events', 'wms_transactions', 'parking',
+  'integration_flows', 'integration_hourly', 'master_data', 'icds', 'dr_status', 'alerts',
+  'ai_recommendations', 'finance_aging',
+  'cadet_journey', 'cctv_cameras', 'cctv_incidents',
+  'it_licenses', 'dcim_hourly', 'dcim_status', 'it_assets',
+];
+const db = {};
+for (const t of TABLES) db[t] = loadTable(DATA_DIR, t);
+console.log(`Loaded ${TABLES.length} CSV tables from /data`);
+
+const app = express();
+const avg = (arr, f) => (arr.length ? arr.reduce((s, x) => s + (f ? f(x) : x), 0) / arr.length : 0);
+const sum = (arr, f) => arr.reduce((s, x) => s + (f ? f(x) : x), 0);
+const round1 = (n) => Math.round(n * 10) / 10;
+
+/* latest BMS row per building */
+function latestBms() {
+  const m = {};
+  for (const r of db.bms_hourly) if (!m[r.building_id] || r.ts > m[r.building_id].ts) m[r.building_id] = r;
+  return m;
+}
+function bmsLastHours(n) {
+  /* Anchor the window to the newest row in the dataset, not wall-clock
+     time. The BMS series is a fixed historical extract; once "now" moves
+     past its final timestamp, a Date.now()-based cutoff matches nothing
+     and every 24h-window figure silently becomes empty (blank charts,
+     zeroed KPIs). Anchoring keeps the demo data working indefinitely
+     while behaving identically for a live feed, where the newest row IS
+     ~now. */
+  if (!db.bms_hourly.length) return [];
+  const newest = db.bms_hourly.reduce((mx, r) => (r.ts > mx ? r.ts : mx), db.bms_hourly[0].ts);
+  const anchor = Math.min(Date.now(), new Date(newest).getTime());
+  const cutoff = new Date(anchor - n * 3600 * 1000).toISOString();
+  return db.bms_hourly.filter((r) => r.ts >= cutoff);
+}
+
+/* Same anchoring rule as bmsLastHours, for any timestamped series: use the
+   newest row in the data as "now" when the dataset ends in the past, so
+   24h windows keep returning rows instead of silently emptying. */
+function cutoffFor(rows, hours, tsKey = 'ts') {
+  if (!rows || !rows.length) return new Date(Date.now() - hours * 3600e3).toISOString();
+  const newest = rows.reduce((mx, r) => (r[tsKey] > mx ? r[tsKey] : mx), rows[0][tsKey]);
+  const anchor = Math.min(Date.now(), new Date(newest).getTime());
+  return new Date(anchor - hours * 3600e3).toISOString();
+}
+
+/* ── squadron scoping ──
+   The two squadron leaders each command half of the cohort. The client appends
+   ?squads=Falcon,Oryx (derived from the logged-in role) to every request;
+   endpoints exposing cadet-level data honour it so a squadron leader only ever
+   sees their own cadets. Campus-wide infrastructure (BMS, energy, CCTV) ignores
+   it. Returns a Set of squadron names, or null when unscoped (all cadets). */
+function squadSet(req) {
+  const raw = req.query.squads;
+  if (!raw) return null;
+  const set = new Set(String(raw).split(',').map((s) => s.trim()).filter(Boolean));
+  return set.size ? set : null;
+}
+const scopeCadets = (req) => {
+  const s = squadSet(req);
+  return s ? db.cadets.filter((c) => s.has(c.squadron)) : db.cadets;
+};
+
+/* ── weapon holder enrichment ──
+   The WMS ledger binds every issue to a cadet_id; on top of that we tag each
+   transaction with who physically holds the weapon — a cadet or a member of
+   staff (armoury / instructors) — so the WMS table can show the mix. Derived
+   deterministically from the txn id so it's stable across requests. */
+const cadetNameById = Object.fromEntries(db.cadets.map((c) => [String(c.cadet_id), c.name]));
+const WMS_STAFF = [
+  { holder: 'WO2 Salim Al Amiri', unit: 'Armoury Staff' },
+  { holder: 'SSgt Rashed Al Habsi', unit: 'PT Instructors' },
+  { holder: 'Capt Yousef Al Balushi', unit: 'Weapons Trg Wing' },
+  { holder: 'Sgt Majid Al Farsi', unit: 'Range Safety' },
+  { holder: 'Lt Omar Al Kindi', unit: 'Tactics Faculty' },
+];
+const hashStr = (s) => { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) & 0x7fffffff; return h; };
+function enrichWms(row) {
+  const h = hashStr(row.txn_id);
+  if (h % 10 < 3) { // ~30% of weapons are held by staff, not cadets
+    const st = WMS_STAFF[h % WMS_STAFF.length];
+    return { ...row, holder_type: 'Staff', holder: st.holder, unit: st.unit };
+  }
+  return { ...row, holder_type: 'Cadet', holder: cadetNameById[String(row.cadet_id)] || `Cadet ${row.cadet_id}`, unit: row.squadron };
+}
+
+/* ── overview / command center ───────────────────────────── */
+app.get('/api/overview', (req, res) => {
+  const cadets = db.cadets;
+  const latest = Object.values(latestBms());
+  const last24 = bmsLastHours(24), prev24 = db.bms_hourly.filter((r) => {
+    const t = new Date(r.ts).getTime(), now = Date.now();
+    return t < now - 24 * 3600e3 && t >= now - 48 * 3600e3;
+  });
+  const kwh24 = sum(last24, (r) => r.kwh), kwhPrev = sum(prev24, (r) => r.kwh);
+  const lastDay = db.wearables_daily.filter((w) => w.date === db.wearables_daily[db.wearables_daily.length - 1].date);
+  const openAlerts = db.alerts.filter((a) => a.status !== 'resolved');
+  const flows = db.integration_flows;
+
+  // 24h occupancy vs energy (cross-module)
+  const byHour = {};
+  for (const r of last24) {
+    const h = r.ts.slice(0, 13);
+    (byHour[h] ||= { occ: [], kwh: 0 }).occ.push(r.occupancy_pct);
+    byHour[h].kwh += r.kwh;
+  }
+  const occupancyEnergy = Object.entries(byHour).sort(([a], [b]) => a.localeCompare(b))
+    .map(([h, v]) => ({ hour: h.slice(11) + ':00', occupancy: round1(avg(v.occ)), kwh: Math.round(v.kwh) }));
+
+  const bySquad = {};
+  for (const c of cadets) {
+    const s = (bySquad[c.squadron] ||= { composite: [], fitness: [], gpa: [] });
+    s.composite.push(c.composite_score); s.fitness.push(c.fitness_score); s.gpa.push(c.gpa);
+  }
+  const readinessDay = {};
+  for (const w of lastDay) readinessDay[w.cadet_id] = w.readiness_score;
+
+  res.json({
+    asOf: new Date().toISOString(),
+    kpis: {
+      cadetsEnrolled: cadets.length,
+      compositeReadiness: round1(avg(cadets, (c) => c.composite_score)),
+      wearableReadiness: round1(avg(lastDay, (w) => w.readiness_score)),
+      occupancyNow: round1(avg(latest, (r) => r.occupancy_pct)),
+      energyTodayKwh: Math.round(kwh24),
+      energyDeltaPct: kwhPrev ? round1(((kwh24 - kwhPrev) / kwhPrev) * 100) : 0,
+      criticalAlerts: openAlerts.filter((a) => ['critical', 'high'].includes(a.severity)).length,
+      openAlerts: openAlerts.length,
+      integrationHealth: Math.round((flows.filter((f) => f.status === 'healthy').length / flows.length) * 100),
+      budgetUtilization: Math.round(avg(db.finance_budget, (b) => b.utilization_pct)),
+      attendanceAvg: round1(avg(cadets, (c) => c.attendance_pct)),
+      systemsOnline: 34, systemsTotal: 35,
+    },
+    occupancyEnergy,
+    readinessBySquadron: Object.entries(bySquad).map(([squadron, v]) => ({
+      squadron,
+      composite: round1(avg(v.composite)),
+      fitness: round1(avg(v.fitness)),
+      academic: round1(avg(v.gpa) * 25),
+    })),
+    domainStatus: [
+      { key: 'academic', link: '/academic', name: 'Academics & Learning', status: 'healthy', metric: `${round1(avg(cadets, (c) => c.gpa))} avg GPA`, sub: `${cadets.filter((c) => c.risk_level === 'high').length} at-risk cadets` },
+      { key: 'readiness', link: '/readiness', name: 'Readiness & Performance', status: 'warning', metric: `${round1(avg(lastDay, (w) => w.readiness_score))} readiness`, sub: `${lastDay.filter((w) => w.acwr > 1.4).length} high injury risk` },
+      { key: 'enterprise', link: '/enterprise', name: 'Enterprise & Finance', status: 'healthy', metric: `${Math.round(avg(db.finance_budget, (b) => b.utilization_pct))}% budget used`, sub: `${db.procurement_pos.filter((p) => p.status === 'Pending Approval').length} POs pending` },
+      { key: 'campus', link: '/campus-ops', name: 'Smart Campus Operations', status: 'critical', metric: `${latest.reduce((s, r) => s + r.alarm_count, 0)} active BMS alarms`, sub: 'AHU-02 fault — Academic Block B' },
+    ],
+    alerts: [...db.alerts].sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 8),
+    aiRecommendations: db.ai_recommendations,
+  });
+});
+
+/* ── domain A: learning & academic ───────────────────────── */
+app.get('/api/academic', (req, res) => {
+  const cadets = scopeCadets(req);
+  const lms = db.lms_daily;
+  const lmsToday = lms[lms.length - 1];
+  res.json({
+    kpis: {
+      enrolled: cadets.length,
+      avgGpa: +avg(cadets, (c) => c.gpa).toFixed(2),
+      attendance: round1(avg(cadets, (c) => c.attendance_pct)),
+      atRisk: cadets.filter((c) => c.risk_level === 'high').length,
+      lmsActivePct: Math.round((lmsToday.active_users / 2380) * 100),
+      aiQueriesToday: lmsToday.ai_assistant_queries,
+      labUtilization: Math.round(avg(db.labs, (l) => l.utilization_pct)),
+      libraryLoans: db.library.find((r) => r.metric === 'Loans today')?.value ?? 0,
+    },
+    gpaTerms: db.sis_gpa_terms,
+    lms30d: lms.map((r) => ({ date: r.date.slice(5), active: r.active_users, aiQueries: r.ai_assistant_queries, submissions: r.submissions })),
+    programs: db.sis_programs,
+    atRiskByProgram: db.sis_programs.map((p) => ({ program: p.program.split(' ')[0] + '…', full: p.program, atRisk: p.at_risk, enrolled: p.enrolled })),
+    labs: db.labs,
+    library: db.library,
+    meritTop: [...cadets].sort((a, b) => a.order_of_merit - b.order_of_merit).slice(0, 8),
+  });
+});
+
+/* ── domain B: military readiness / HPO ──────────────────── */
+app.get('/api/readiness', (req, res) => {
+  const squads = squadSet(req);
+  const cadets = squads ? db.cadets.filter((c) => squads.has(c.squadron)) : db.cadets;
+  const cadetIds = new Set(cadets.map((c) => c.cadet_id));
+  const wear = squads ? db.wearables_daily.filter((w) => cadetIds.has(w.cadet_id)) : db.wearables_daily;
+  const dates = [...new Set(wear.map((w) => w.date))].sort();
+  const lastDate = dates[dates.length - 1];
+  const today = wear.filter((w) => w.date === lastDate);
+  const cadetById = Object.fromEntries(cadets.map((c) => [c.cadet_id, c]));
+
+  const trend = dates.map((d) => {
+    const rows = wear.filter((w) => w.date === d);
+    return {
+      date: d.slice(5),
+      readiness: round1(avg(rows, (r) => r.readiness_score)),
+      hrv: round1(avg(rows, (r) => r.hrv_ms)),
+      sleep: round1(avg(rows, (r) => r.sleep_hours)),
+    };
+  });
+
+  const hpoRows = squads ? db.hpo_domains.filter((r) => squads.has(r.squadron)) : db.hpo_domains;
+  const domains = {};
+  for (const r of hpoRows) (domains[r.domain] ||= []).push(r.score);
+  const radar = Object.entries(domains).map(([domain, scores]) => ({ domain, score: round1(avg(scores)) }));
+
+  const highRisk = today.filter((w) => w.acwr > 1.4).map((w) => ({
+    ...w, name: cadetById[w.cadet_id]?.name, squadron: cadetById[w.cadet_id]?.squadron,
+  })).slice(0, 12);
+
+  const bySquad = {};
+  for (const w of today) {
+    const sq = cadetById[w.cadet_id]?.squadron;
+    (bySquad[sq] ||= []).push(w);
+  }
+
+  res.json({
+    kpis: {
+      avgReadiness: round1(avg(today, (w) => w.readiness_score)),
+      deviceSyncRate: round1((cadets.filter((c) => c.device_synced_hrs_ago <= 12).length / cadets.length) * 100),
+      avgSleep: round1(avg(today, (w) => w.sleep_hours)),
+      avgHrv: Math.round(avg(today, (w) => w.hrv_ms)),
+      highInjuryRisk: today.filter((w) => w.acwr > 1.4).length,
+      avgVo2: round1(avg(today, (w) => w.vo2max)),
+      avgBodyBattery: Math.round(avg(today, (w) => w.body_battery)),
+      avgStress: Math.round(avg(today, (w) => w.stress_avg)),
+    },
+    trend,
+    radar,
+    squadrons: Object.entries(bySquad).map(([squadron, rows]) => ({
+      squadron,
+      readiness: round1(avg(rows, (r) => r.readiness_score)),
+      sleep: round1(avg(rows, (r) => r.sleep_hours)),
+      hrv: Math.round(avg(rows, (r) => r.hrv_ms)),
+      load: Math.round(avg(rows, (r) => r.training_load)),
+    })),
+    highRisk,
+    cadets: cadets.map((c) => ({
+      cadet_id: c.cadet_id, name: c.name, squadron: c.squadron, year: c.year,
+      composite: c.composite_score, merit: c.order_of_merit, fitness: c.fitness_score,
+      device: c.garmin_device, syncedHrs: c.device_synced_hrs_ago, risk: c.risk_level,
+      readiness: today.find((w) => w.cadet_id === c.cadet_id)?.readiness_score ?? null,
+    })).sort((a, b) => a.merit - b.merit),
+  });
+});
+
+/* human digital twin — individual cadet drill-down */
+app.get('/api/readiness/cadet/:id', (req, res) => {
+  const c = db.cadets.find((x) => String(x.cadet_id) === String(req.params.id));
+  if (!c) return res.status(404).json({ error: 'cadet not found' });
+  const series = db.wearables_daily.filter((w) => w.cadet_id === c.cadet_id)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  res.json({ cadet: c, series });
+});
+
+/* ── domain C: enterprise (ERP / HRMS) ───────────────────── */
+app.get('/api/enterprise', (req, res) => {
+  const fin = db.finance_budget;
+  const pos = db.procurement_pos;
+  const hr = db.hrms_departments;
+  const funnelOrder = ['Draft', 'Pending Approval', 'Approved', 'Issued', 'Partially Delivered', 'Delivered', 'Invoiced', 'Paid'];
+  const funnel = funnelOrder.map((s) => ({
+    status: s,
+    count: pos.filter((p) => p.status === s).length,
+    value: Math.round(sum(pos.filter((p) => p.status === s), (p) => p.value_kaed)),
+  }));
+  res.json({
+    kpis: {
+      budgetTotal: round1(sum(fin, (f) => f.budget_maed)),
+      budgetUsedPct: Math.round((sum(fin, (f) => f.actual_maed) / sum(fin, (f) => f.budget_maed)) * 100),
+      openPoValue: round1(sum(pos.filter((p) => !['Paid', 'Delivered', 'Invoiced'].includes(p.status)), (p) => p.value_kaed) / 1000),
+      posPendingApproval: pos.filter((p) => p.status === 'Pending Approval').length,
+      headcount: sum(hr, (d) => d.headcount),
+      establishment: sum(hr, (d) => d.establishment),
+      vacancies: sum(hr, (d) => d.vacancies),
+      attrition: round1(avg(hr, (d) => d.attrition_pct)),
+      outsourced: sum(hr, (d) => d.outsourced),
+      roomUtilization: Math.round(avg(db.room_utilization, (r) => r.utilization_pct)),
+    },
+    budget: fin,
+    cashflow: db.finance_cashflow,
+    procurementFunnel: funnel,
+    recentPos: [...pos].sort((a, b) => b.value_kaed - a.value_kaed).slice(0, 10),
+    departments: hr,
+    recruitment: db.hrms_recruitment,
+    rooms: db.room_utilization,
+    aging: db.finance_aging,
+    // top vendor spend — aggregated from the PO ledger
+    vendorSpend: Object.entries(pos.reduce((m, p) => { m[p.supplier] = (m[p.supplier] || 0) + p.value_kaed; return m; }, {}))
+      .map(([supplier, value]) => ({ supplier, value_kaed: Math.round(value) }))
+      .sort((a, b) => b.value_kaed - a.value_kaed).slice(0, 7),
+    // approvals waiting — POs pending > 5 days, most-aged first
+    approvals: pos.filter((p) => p.status === 'Pending Approval')
+      .sort((a, b) => b.days_open - a.days_open)
+      .map((p) => ({ ref: p.po_id, supplier: p.supplier, value_kaed: p.value_kaed, days: p.days_open, department: p.department }))
+      .slice(0, 8),
+  });
+});
+
+/* ── domain D: campus & smart ops ────────────────────────── */
+app.get('/api/campus', (req, res) => {
+  const latest = latestBms();
+  const latestRows = Object.values(latest);
+  const last24 = bmsLastHours(24);
+  const sec = db.physical_security;
+  const buildings = db.buildings;
+  // Weapon ledger — tag every txn with its holder (cadet / staff), then scope
+  // cadet-held weapons to the squadron leader's companies (staff-held weapons
+  // belong to campus armoury/instructors, so they stay visible to everyone).
+  const squads = squadSet(req);
+  const wms = db.wms_transactions.map(enrichWms)
+    .filter((w) => !squads || w.holder_type === 'Staff' || squads.has(w.squadron));
+
+  const byHourZone = {};
+  for (const r of last24) {
+    const h = r.ts.slice(11, 13) + ':00';
+    (byHourZone[h] ||= { hour: h });
+    byHourZone[h][r.building_id] = (byHourZone[h][r.building_id] || 0) + r.kwh;
+  }
+
+  const comfort = buildings.map((b) => {
+    const r = latest[b.building_id] || {};
+    const tempDev = Math.abs(r.temp_c - 22.5);
+    return {
+      building_id: b.building_id, name: b.name,
+      temp: r.temp_c, co2: r.co2_ppm, occupancy: r.occupancy_pct, humidity: r.humidity_pct,
+      alarms: r.alarm_count,
+      status: r.alarm_count > 0 || tempDev > 2 ? 'critical' : r.co2_ppm > 1000 || tempDev > 1.2 ? 'warning' : 'normal',
+    };
+  });
+
+  res.json({
+    kpis: {
+      buildingsOnline: buildings.length,
+      activeAlarms: sum(latestRows, (r) => r.alarm_count),
+      avgTemp: round1(avg(latestRows, (r) => r.temp_c)),
+      avgCo2: Math.round(avg(latestRows, (r) => r.co2_ppm)),
+      energy24h: Math.round(sum(last24, (r) => r.kwh)),
+      water24h: Math.round(sum(last24, (r) => r.water_l) / 1000),
+      camerasOnline: sum(sec, (s) => s.cameras_online),
+      camerasTotal: sum(sec, (s) => s.cameras_total),
+      accessEvents: sum(sec, (s) => s.access_events_24h),
+      weaponsOut: wms.filter((w) => w.status === 'out' || w.status === 'overdue').length,
+      weaponsOverdue: wms.filter((w) => w.status === 'overdue').length,
+      parkingOccupancy: Math.round((sum(db.parking, (p) => p.occupied) / sum(db.parking, (p) => p.capacity)) * 100),
+      assetsInFault: db.bms_assets.filter((a) => a.status === 'fault').length,
+      assetsDegraded: db.bms_assets.filter((a) => a.status === 'degraded').length,
+    },
+    energyByZone: Object.values(byHourZone),
+    zoneKeys: buildings.map((b) => b.building_id),
+    comfort,
+    assets: db.bms_assets.filter((a) => a.status !== 'running').sort((a, b) => a.health_pct - b.health_pct).slice(0, 10),
+    security: sec.map((s) => ({ ...s, name: buildings.find((b) => b.building_id === s.building_id)?.name })),
+    wmsRecent: [...wms].sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 10),
+    wmsOverdue: wms.filter((w) => w.status === 'overdue'),
+    parking: db.parking,
+    fire: buildings.map((b) => ({ building_id: b.building_id, name: b.name, status: 'normal', lastTest: '2026-06-14' })),
+  });
+});
+
+/* ── sustainability & energy (Generic-mode module) ─────────
+   ADDITIVE ONLY - a new read-only endpoint over data already loaded
+   (energy_daily + buildings). No existing route, response or CSV is
+   touched. Every value below is computed from the real rows; nothing
+   is fabricated, and no targets/benchmarks/forecasts are invented. */
+app.get('/api/sustainability', (req, res) => {
+  /* SUSTAINABILITY & ENERGY — Generic-mode core module.
+     Read-only aggregation over two existing datasets only:
+       data/energy_daily.csv  (building_id, date, kwh, water_m3, solar_kwh)
+       data/buildings.csv     (name, area_m2)
+     Nothing is fabricated: no targets, benchmarks, forecasts or
+     year-on-year figures are invented, and no metric is returned that the
+     source cannot support. The single stated assumption is the grid
+     emission factor used for the carbon ESTIMATE, which is returned so
+     the UI can print it alongside the number. */
+  const GRID_FACTOR = 0.417;                 // kg CO2e per kWh — stated assumption
+  const rows = db.energy_daily || [];
+  const bldById = Object.fromEntries(db.buildings.map((b) => [b.building_id, b]));
+
+  // Period comes from the data itself — never hard-coded.
+  const dates = [...new Set(rows.map((r) => r.date))].sort();
+  const period = { start: dates[0] || null, end: dates[dates.length - 1] || null, days: dates.length };
+
+  // Daily series (all buildings summed per date).
+  const byDate = {};
+  for (const r of rows) {
+    (byDate[r.date] ||= { date: r.date, kwh: 0, water_m3: 0, solar_kwh: 0 });
+    byDate[r.date].kwh += r.kwh;
+    byDate[r.date].water_m3 += r.water_m3;
+    byDate[r.date].solar_kwh += r.solar_kwh;
+  }
+  const daily = Object.values(byDate)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((d) => ({
+      date: d.date,
+      kwh: Math.round(d.kwh),
+      water_m3: Math.round(d.water_m3),
+      solar_kwh: Math.round(d.solar_kwh),
+    }));
+
+  /* Highest-consumption DAY. The source is daily energy, not instantaneous
+     demand, so this is deliberately a consumption peak — never described
+     as a demand peak, and no kW/kVA figure is derivable here. */
+  const peakConsumptionDay = daily.length
+    ? daily.reduce((mx, d) => (d.kwh > mx.kwh ? d : mx), daily[0])
+    : null;
+
+  // Per-building roll-up joined to the real recorded floor area.
+  const byBuilding = {};
+  for (const r of rows) {
+    (byBuilding[r.building_id] ||= { building_id: r.building_id, kwh: 0, water_m3: 0, solar_kwh: 0 });
+    byBuilding[r.building_id].kwh += r.kwh;
+    byBuilding[r.building_id].water_m3 += r.water_m3;
+    byBuilding[r.building_id].solar_kwh += r.solar_kwh;
+  }
+  const buildings = Object.values(byBuilding).map((b) => {
+    const meta = bldById[b.building_id];
+    const area = meta?.area_m2 || 0;
+    const kwh = Math.round(b.kwh);
+    const solar = Math.round(b.solar_kwh);
+    return {
+      building_id: b.building_id,
+      name: meta?.name || b.building_id,   // real name; the client relabels for display
+      area_m2: area,
+      kwh,
+      solar_kwh: solar,
+      water_m3: Math.round(b.water_m3),
+      // Only buildings that actually return generation are marked, so the
+      // UI can say "N of M instrumented" instead of implying campus-wide solar.
+      hasSolar: solar > 0,
+      // null (not 0) when area is unknown, so the client renders "—"
+      // rather than a fabricated intensity.
+      intensity: area > 0 ? round1(kwh / area) : null,
+    };
+  }).sort((a, b) => b.kwh - a.kwh);
+
+  const totalKwh = Math.round(sum(rows, (r) => r.kwh));
+  const withArea = buildings.filter((b) => b.area_m2 > 0);
+  const areaTotal = sum(withArea, (b) => b.area_m2);
+
+  res.json({
+    period,
+    totals: {
+      kwh: totalKwh,
+      solar_kwh: Math.round(sum(rows, (r) => r.solar_kwh)),
+      water_m3: Math.round(sum(rows, (r) => r.water_m3)),
+      // ESTIMATE — consumption x stated factor. Not measured emissions.
+      carbon_kg: Math.round(totalKwh * GRID_FACTOR),
+      area_m2: Math.round(areaTotal),
+      intensity_kwh_m2: areaTotal > 0 ? +(sum(withArea, (b) => b.kwh) / areaTotal).toFixed(2) : null,
+    },
+    assumptions: {
+      gridEmissionFactorKgPerKwh: GRID_FACTOR,
+      gridEmissionFactorLabel: `${GRID_FACTOR} kg CO2e/kWh`,
+    },
+    meta: {
+      buildingsReporting: buildings.length,
+      solarInstrumentedBuildings: buildings.filter((b) => b.hasSolar).length,
+      buildingsWithArea: withArea.length,
+    },
+    daily,
+    buildings,
+    peakConsumptionDay,
+  });
+});
+
+/* ── digital twin ────────────────────────────────────────── */
+app.get('/api/twin', (req, res) => {
+  const latest = latestBms();
+  const alarmAssets = db.bms_assets.filter((a) => a.status === 'fault' || a.status === 'degraded');
+  res.json({
+    buildings: db.buildings.map((b) => ({
+      ...b,
+      live: latest[b.building_id] || null,
+      assetIssues: alarmAssets.filter((a) => a.building_id === b.building_id).length,
+      camerasOffline: (() => {
+        const s = db.physical_security.find((x) => x.building_id === b.building_id);
+        return s ? s.cameras_total - s.cameras_online : 0;
+      })(),
+    })),
+  });
+});
+
+app.get('/api/twin/building/:id', (req, res) => {
+  const b = db.buildings.find((x) => x.building_id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'building not found' });
+  const series = db.bms_hourly.filter((r) => r.building_id === b.building_id)
+    .sort((a, b2) => a.ts.localeCompare(b2.ts)).slice(-24)
+    .map((r) => ({ hour: r.ts.slice(11, 16), temp: r.temp_c, co2: r.co2_ppm, occupancy: r.occupancy_pct, kwh: r.kwh }));
+  res.json({
+    building: b,
+    series,
+    assets: db.bms_assets.filter((a) => a.building_id === b.building_id),
+    security: db.physical_security.find((s) => s.building_id === b.building_id) || null,
+    energy30d: db.energy_daily.filter((e) => e.building_id === b.building_id)
+      .map((e) => ({ date: e.date.slice(5), kwh: e.kwh, water: e.water_m3 })),
+  });
+});
+
+/* ── security operations (split-SIEM) ────────────────────── */
+app.get('/api/security', (req, res) => {
+  const ev = db.siem_events;
+  const cutoff24 = cutoffFor(ev, 24);
+  const last24 = ev.filter((e) => e.ts >= cutoff24);
+  const sevOrder = ['critical', 'high', 'medium', 'low', 'info'];
+
+  const byHour = {};
+  for (const e of last24) {
+    const h = e.ts.slice(11, 13) + ':00';
+    const o = (byHour[e.ts.slice(0, 13)] ||= { hour: h, critical: 0, high: 0, medium: 0, low: 0, info: 0 });
+    o[e.severity]++;
+  }
+  const catCount = {};
+  for (const e of last24) catCount[e.category] = (catCount[e.category] || 0) + 1;
+
+  const netCount = {};
+  for (const e of last24) {
+    const n = (netCount[e.network] ||= { events: 0, high: 0 });
+    n.events++;
+    if (['critical', 'high'].includes(e.severity)) n.high++;
+  }
+
+  res.json({
+    kpis: {
+      events24h: last24.length,
+      criticalOpen: ev.filter((e) => e.severity === 'critical' && e.status !== 'resolved').length,
+      authFailures24h: last24.filter((e) => e.category === 'auth_failure').length,
+      pamSessions24h: last24.filter((e) => e.category === 'pam_session').length,
+      otAnomalies24h: last24.filter((e) => e.category === 'ot_anomaly').length,
+      syslogEps: db.integration_hourly[db.integration_hourly.length - 1]?.syslog_eps ?? 0,
+      mttrMin: 42,
+      aecertReady: 'Ready',
+    },
+    timeline: Object.entries(byHour).sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v),
+    categories: Object.entries(catCount).map(([category, count]) => ({ category, count }))
+      .sort((a, b) => b.count - a.count),
+    networks: ['RED', 'YELLOW', 'ORANGE', 'GREY'].map((n) => ({
+      network: n,
+      label: { RED: 'Cadet / Residential', YELLOW: 'Military Enterprise', ORANGE: 'Physical Security / OT', GREY: 'Virtual Learning' }[n],
+      ...(netCount[n] || { events: 0, high: 0 }),
+    })),
+    feed: [...ev].sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 40),
+    openIncidents: ev.filter((e) => e.status !== 'resolved' && sevOrder.indexOf(e.severity) <= 1)
+      .sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 8),
+  });
+});
+
+/* ── integration & data platform ─────────────────────────── */
+app.get('/api/integration', (req, res) => {
+  const flows = db.integration_flows;
+  res.json({
+    kpis: {
+      flowsHealthy: flows.filter((f) => f.status === 'healthy').length,
+      flowsTotal: flows.length,
+      msgs24h: sum(flows, (f) => f.msgs_24h),
+      avgLatency: Math.round(avg(flows.filter((f) => f.transport.includes('API')), (f) => f.latency_ms)),
+      avgErrorRate: round1(avg(flows, (f) => f.error_rate_pct)),
+      cadetIdMatch: db.master_data.find((m) => m.entity.startsWith('Cadet'))?.match_rate_pct ?? 0,
+      mftFiles24h: sum(db.integration_hourly, (h) => h.mft_files),
+      icdsApproved: db.icds.filter((i) => i.status === 'Approved').length,
+      icdsTotal: db.icds.length,
+    },
+    flows,
+    hourly: db.integration_hourly.map((h) => ({ ...h, hour: h.ts.slice(11, 16) })),
+    masterData: db.master_data,
+    icds: db.icds,
+    dr: db.dr_status,
+  });
+});
+
+/* ── cadet journey — unified timeline on the single cadet ID ── */
+app.get('/api/cadet-journey', (req, res) => {
+  res.json({
+    cadets: [...scopeCadets(req)]
+      .sort((a, b) => a.order_of_merit - b.order_of_merit)
+      .map((c) => ({
+        cadet_id: c.cadet_id, name: c.name, squadron: c.squadron, year: c.year,
+        program: c.program, composite_score: c.composite_score,
+        order_of_merit: c.order_of_merit, risk_level: c.risk_level,
+      })),
+  });
+});
+
+app.get('/api/cadet-journey/:id', (req, res) => {
+  const cadet = db.cadets.find((c) => String(c.cadet_id) === String(req.params.id));
+  if (!cadet) return res.status(404).json({ error: 'unknown cadet id' });
+  const sq = squadSet(req);
+  if (sq && !sq.has(cadet.squadron)) return res.status(403).json({ error: 'cadet outside your squadron' });
+  const timeline = db.cadet_journey
+    .filter((e) => e.cadet_id === cadet.cadet_id)
+    .sort((a, b) => b.ts.localeCompare(a.ts));
+  const wear14 = db.wearables_daily
+    .filter((w) => w.cadet_id === cadet.cadet_id)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const lastW = wear14.at(-1) || {};
+  const fitnessTier = cadet.fitness_score >= 90 ? 'Elite' : cadet.fitness_score >= 75 ? 'Advanced' : cadet.fitness_score >= 60 ? 'Proficient' : 'Developing';
+
+  // ── cross-module joins on the single Cadet ID ──
+  // WMS weapon issuance (Domain D / armoury)
+  const weapons = db.wms_transactions
+    .filter((w) => w.cadet_id === cadet.cadet_id)
+    .sort((a, b) => b.ts.localeCompare(a.ts))
+    .slice(0, 6);
+  const weaponsOut = weapons.filter((w) => w.status !== 'closed').length;
+  // squadron HPO readiness (Readiness domain)
+  const squadronDomains = db.hpo_domains.filter((d) => d.squadron === cadet.squadron);
+  const squadronPeers = db.cadets.filter((c) => c.squadron === cadet.squadron);
+  const squadronAvgComposite = round1(avg(squadronPeers, (c) => c.composite_score));
+  // LMS engagement proxy (Academic domain) — attendance percentile within cohort
+  const better = db.cadets.filter((c) => c.composite_score < cadet.composite_score).length;
+  const percentile = Math.round((better / db.cadets.length) * 100);
+
+  res.json({
+    cadet: { ...cadet, fitness_tier: fitnessTier },
+    kpis: {
+      year: cadet.year,
+      gpa: cadet.gpa,
+      composite: cadet.composite_score,
+      orderOfMerit: cadet.order_of_merit,
+      readinessToday: lastW.readiness_score ?? null,
+      acwr: lastW.acwr ?? null,
+      attendance: cadet.attendance_pct,
+      percentile,
+      weaponsOut,
+      squadronAvgComposite,
+    },
+    timeline,
+    wearables: wear14.map((w) => ({ date: w.date.slice(5), readiness: w.readiness_score, sleep: +w.sleep_hours, load: w.training_load, acwr: +w.acwr })),
+    // interdependency payloads
+    weapons,
+    squadron: {
+      name: cadet.squadron,
+      peers: squadronPeers.length,
+      avgComposite: squadronAvgComposite,
+      domains: squadronDomains,
+    },
+  });
+});
+
+/* ── CCTV / VMS — incident management ─────────────────────── */
+app.get('/api/cctv', (req, res) => {
+  const cams = db.cctv_cameras;
+  const bldgById = Object.fromEntries(db.buildings.map((b) => [b.building_id, b]));
+  // join each camera to its building (interdependency → Digital Twin)
+  const camerasJoined = cams.map((c) => ({ ...c, building_name: bldgById[c.building_id]?.name || c.building_id }));
+  const camById = Object.fromEntries(camerasJoined.map((c) => [c.camera_id, c]));
+  const incidents = [...db.cctv_incidents].sort((a, b) => b.ts.localeCompare(a.ts))
+    .map((i) => ({ ...i, building_id: camById[i.camera_id]?.building_id || '', building_name: camById[i.camera_id]?.building_name || '' }));
+  const cutoff24 = cutoffFor(db.cctv_incidents, 24);
+  res.json({
+    kpis: {
+      camerasOnline: cams.filter((c) => c.status === 'online').length,
+      camerasTotal: cams.length,
+      incidents24h: incidents.filter((i) => i.ts >= cutoff24).length,
+      openIncidents: incidents.filter((i) => i.status !== 'closed').length,
+      retentionDays: 90,
+      storageUsedPct: 68,
+    },
+    cameras: camerasJoined,
+    incidents,
+  });
+});
+
+/* ── enterprise IT — DCIM, licences, asset lifecycle ──────── */
+app.get('/api/itops', (req, res) => {
+  const lic = db.it_licenses;
+  const assets = db.it_assets;
+  const dcimNow = db.dcim_hourly.at(-1) || {};
+  res.json({
+    kpis: {
+      pue: dcimNow.pue,
+      upsHealth: 97,
+      coolingUsedPct: 71,
+      licenseCompliancePct: Math.round((lic.filter((l) => l.compliance === 'compliant').length / lic.length) * 100),
+      seatsConsumed: sum(lic, (l) => l.consumed),
+      seatsTotal: sum(lic, (l) => l.total),
+      assetsInService: assets.filter((a) => a.status === 'in service').length,
+      assetsTotal: assets.length,
+      warrantyExpiring: assets.filter((a) => a.warranty_status !== 'active').length,
+    },
+    licenses: lic,
+    dcim: db.dcim_status,
+    dcimHourly: db.dcim_hourly.map((h) => ({ ...h, hour: h.ts.slice(11, 16) })),
+    assets: [...assets].sort((a, b) => a.warranty_end.localeCompare(b.warranty_end)),
+  });
+});
+
+/* ── alerts (global slide-in panel) ──────────────────────── */
+app.get('/api/alerts', (req, res) => {
+  res.json({ alerts: [...db.alerts].sort((a, b) => b.ts.localeCompare(a.ts)) });
+});
+
+app.get('/api/health', (req, res) => res.json({ ok: true, tables: TABLES.length }));
+
+/* ── extended API (auth + IoT sensors) ── */
+const { registerExt } = require('./ext/api');
+registerExt(app, express, db);
+
+/* ── serve the built React client in production ─────────────
+   `npm start` runs `vite build` first, which outputs to /dist
+   (see vite.config.js). The dev workflow (`npm run dev`) doesn't
+   need this — Vite's own dev server handles the client on :5173. */
+const distPath = path.join(__dirname, '..', 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+}
+
+const PORT = process.env.API_PORT || process.env.PORT || 5051;
+const HOST = process.env.API_HOST || '0.0.0.0';
+const { networkInterfaces } = require('os');
+const getLocalIP = () => {
+  for (const [, addrs] of Object.entries(networkInterfaces())) {
+    const addr = addrs.find(a => a.family === 'IPv4' && !a.internal);
+    if (addr) return addr.address;
+  }
+  return 'localhost';
+};
+const ip = getLocalIP();
+app.listen(PORT, HOST, () => {
+  console.log(`ZMU API listening on http://${ip}:${PORT}`);
+  console.log(`  (also available at http://localhost:${PORT})`);
+});

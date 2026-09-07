@@ -1,0 +1,52 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Campus Boundary (OSM landuse=military, way 1244234574)",
+        "source": "OpenStreetMap Overpass API — landuse=military way near ZMU, fetched live and verified against the real published extent",
+        "approximate": false
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              54.3873131,
+              24.2579766
+            ],
+            [
+              54.3886194,
+              24.2556156
+            ],
+            [
+              54.3859849,
+              24.2543771
+            ],
+            [
+              54.3847007,
+              24.2568126
+            ],
+            [
+              54.3849662,
+              24.2568444
+            ],
+            [
+              54.3852961,
+              24.2569618
+            ],
+            [
+              54.3855751,
+              24.2571183
+            ],
+            [
+              54.3873131,
+              24.2579766
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

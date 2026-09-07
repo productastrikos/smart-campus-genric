@@ -1,0 +1,8 @@
+cost_center,budget_maed,actual_maed,committed_maed,utilization_pct,variance_pct
+Academic Programs,86,44.7,13.8,52,2
+Military Training,64.5,26.4,8.4,41,-9
+Campus Operations & FM,58.2,26.2,7,45,-5
+ICT & Digital Campus,92.4,54.5,8.3,59,9
+Manpower & HR,148.6,62.4,19.3,42,-8
+Medical & HPO,22.8,9.8,2.5,43,-7
+Logistics & Supply,31.5,18,5.7,57,7

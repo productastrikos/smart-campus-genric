@@ -1,0 +1,16 @@
+# The repository root IS the deployed site, and Hostinger checks it out on
+# Linux. Normalise every text file to LF so what ships is byte-identical to
+# what was built, regardless of the platform it was committed from.
+* text=auto eol=lf
+
+# Binaries must never be touched.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.woff  binary
+*.woff2 binary
+*.mp4  binary
+*.webm binary
